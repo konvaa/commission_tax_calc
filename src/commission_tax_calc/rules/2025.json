@@ -1,0 +1,188 @@
+{
+  "schema_version": 1,
+  "tax_year": 2025,
+  "revision": 1,
+  "updated": "2026-11-11",
+  "income_cap": 2000000,
+  "note": {
+    "cs": "Pravidla jsou informativní. Ověř je v aktuálním znění zákona nebo s daňovým poradcem.",
+    "en": "Rules are informative. Verify them against the current law or with a tax advisor."
+  },
+  "sources": [
+    {
+      "label": {
+        "cs": "e-Sbírka – zákon č. 586/1992 Sb., o daních z příjmů (oficiální znění)",
+        "en": "e-Sbírka – Act No. 586/1992 Coll. on Income Taxes (official text)"
+      },
+      "url": "https://www.e-sbirka.cz/sb/1992/586"
+    },
+    {
+      "label": {
+        "cs": "Zákony pro lidi – § 7 zákona o daních z příjmů",
+        "en": "Zákony pro lidi – Section 7 of the Income Tax Act"
+      },
+      "url": "https://www.zakonyprolidi.cz/cs/1992-586#p7"
+    },
+    {
+      "label": {
+        "cs": "Měšec.cz – úplné znění zákona o daních z příjmů",
+        "en": "Měšec.cz – full text of the Income Tax Act"
+      },
+      "url": "https://www.mesec.cz/zakony/zakon-o-danich-z-prijmu/uplne/"
+    }
+  ],
+  "rates": [
+    {
+      "id": "crafts_agriculture",
+      "percent": 80,
+      "max_expenses": 1600000,
+      "legal_ref": "§ 7 odst. 7 písm. a)",
+      "name": {
+        "cs": "Řemeslné živnosti a zemědělství",
+        "en": "Craft trades and agriculture"
+      },
+      "description": {
+        "cs": "Příjmy ze zemědělské výroby, lesního a vodního hospodářství a z řemeslných živností.",
+        "en": "Income from agriculture, forestry and water management and from craft trades."
+      },
+      "examples": {
+        "cs": [
+          "instalatér",
+          "truhlář",
+          "zámečník",
+          "kadeřník",
+          "řezník",
+          "zedník",
+          "zemědělec"
+        ],
+        "en": [
+          "plumber",
+          "carpenter",
+          "locksmith",
+          "hairdresser",
+          "butcher",
+          "bricklayer",
+          "farmer"
+        ]
+      }
+    },
+    {
+      "id": "trades",
+      "percent": 60,
+      "max_expenses": 1200000,
+      "legal_ref": "§ 7 odst. 7 písm. b)",
+      "name": {
+        "cs": "Ostatní živnosti",
+        "en": "Other trades"
+      },
+      "description": {
+        "cs": "Příjmy z živností volných, vázaných a koncesovaných (kromě řemeslných).",
+        "en": "Income from unqualified, qualified and licensed trades (except craft trades)."
+      },
+      "examples": {
+        "cs": [
+          "programátor (volná živnost)",
+          "grafik",
+          "lektor",
+          "e-shop",
+          "účetní",
+          "ubytování"
+        ],
+        "en": [
+          "programmer (unqualified trade)",
+          "graphic designer",
+          "lecturer",
+          "e-shop",
+          "bookkeeper",
+          "accommodation"
+        ]
+      }
+    },
+    {
+      "id": "other_self_employment",
+      "percent": 40,
+      "max_expenses": 800000,
+      "legal_ref": "§ 7 odst. 7 písm. c)",
+      "name": {
+        "cs": "Jiné podnikání a svobodná povolání",
+        "en": "Other business and liberal professions"
+      },
+      "description": {
+        "cs": "Příjmy z jiného podnikání podle zvláštních právních předpisů (není živností) a z jiné samostatné činnosti, např. svobodná povolání a autorské honoráře.",
+        "en": "Income from business governed by special laws (not a trade) and other independent activities, e.g. liberal professions and royalties."
+      },
+      "examples": {
+        "cs": [
+          "zprostředkování pojištění a investic (zvláštní zákon)",
+          "zprostředkování úvěrů",
+          "advokát",
+          "notář",
+          "lékař",
+          "daňový poradce",
+          "autor, umělec"
+        ],
+        "en": [
+          "insurance and investment intermediation (special act)",
+          "credit intermediation",
+          "attorney",
+          "notary",
+          "physician",
+          "tax advisor",
+          "author, artist"
+        ]
+      }
+    },
+    {
+      "id": "rental_business_assets",
+      "percent": 30,
+      "max_expenses": 600000,
+      "legal_ref": "§ 7 odst. 7 písm. d)",
+      "name": {
+        "cs": "Nájem obchodního majetku",
+        "en": "Rental of business assets"
+      },
+      "description": {
+        "cs": "Příjmy z nájmu majetku zařazeného v obchodním majetku.",
+        "en": "Income from renting assets included in business property."
+      },
+      "examples": {
+        "cs": [
+          "pronájem nemovitosti vedené v obchodním majetku"
+        ],
+        "en": [
+          "renting out real estate held as business property"
+        ]
+      }
+    }
+  ],
+  "activity_mapping": [
+    {
+      "match": "není živností",
+      "rate_id": "other_self_employment"
+    },
+    {
+      "match": "zvláštním předpisem",
+      "rate_id": "other_self_employment"
+    },
+    {
+      "match": "řemesln",
+      "rate_id": "crafts_agriculture"
+    },
+    {
+      "match": "živnost volná",
+      "rate_id": "trades"
+    },
+    {
+      "match": "živnost vázaná",
+      "rate_id": "trades"
+    },
+    {
+      "match": "živnost koncesovaná",
+      "rate_id": "trades"
+    },
+    {
+      "match": "nájem obchodního majetku",
+      "rate_id": "rental_business_assets"
+    }
+  ]
+}

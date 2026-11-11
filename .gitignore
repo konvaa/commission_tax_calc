@@ -1,0 +1,27 @@
+# --- Personal data: real commission statements must never be committed (GDPR)
+*.pdf
+*.PDF
+vzory/
+demo_statements/
+
+# --- Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Build (PyInstaller)
+build/
+dist/
+*.spec
+
+# --- Editors / OS
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
