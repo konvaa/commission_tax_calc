@@ -1,5 +1,7 @@
 """Command-line interface - the same core, without a GUI.
 
+Reads commission statements and issued invoices (ISDOC, PDF text, OCR).
+
 Useful for scripting and as living proof that the domain logic does not
 depend on Qt. Output is English; the GUI is the localized front-end.
 
@@ -12,13 +14,17 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import date
 from pathlib import Path
 
 from .core.aggregator import YearMode, available_years, build_report
+from .core.ares import suggested_rate_ids
+from .core.invoice_report import build_invoice_report, invoice_years
+from .core.invoice_store import InvoiceStore
 from .core.issues import Issue
-from .core.loader import find_pdfs, load_statements
+from .core.loader import find_documents, load_documents
 from .core.money import format_czk
-from .core.paths import rules_cache_dir
+from .core.paths import rules_cache_dir, user_data_dir
 from .core.rules import RulesError, RulesRepository
 from .core.tax import TaxSummary, compute
 
@@ -38,10 +44,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Rules update failed: {exc}", file=sys.stderr)
 
     mode = YearMode(args.mode)
-    loaded = load_statements(find_pdfs(args.folder, recursive=args.recursive))
-    years = available_years(loaded.statements, mode)
+    # Invoice decisions made in the GUI (own IČO, rates, payment dates) are
+    # read from the same store, so the CLI gives the same numbers.
+    store = InvoiceStore.load(user_data_dir() / "invoices.json")
+    if args.my_ico:
+        store.my_ico = args.my_ico
+    loaded = load_documents(find_documents(args.folder, recursive=args.recursive), my_ico=store.my_ico)
+    years = sorted(set(available_years(loaded.statements, mode)) | invoice_years(loaded.invoices, store))
     if not years:
-        print("No statements found.", file=sys.stderr)
+        print("No statements or invoices found.", file=sys.stderr)
         _print_issues(loaded.failures)
         return 1
     year = args.year or max(years)
@@ -51,13 +62,31 @@ def main(argv: list[str] | None = None) -> int:
     if rules is None:
         print("No flat-rate rules available.", file=sys.stderr)
         return 1
-    tax = compute(report.activity_totals, rules)
-    issues = loaded.failures + report.all_issues() + tax.issues
+    ares = store.ares.get(store.my_ico or "")
+    ares_rates = suggested_rate_ids(ares, rules, date(year, 12, 31)) if ares else None
+    invoices = build_invoice_report(loaded.invoices, year, store, ares_rates)
+    tax = compute(report.activity_totals, rules, None, invoices.rate_income, invoices.unassigned)
+    issues = loaded.failures + report.all_issues() + invoices.all_issues() + tax.issues
 
     if args.json:
-        print(json.dumps(_as_json(year, mode, report, tax, issues, exact), ensure_ascii=False, indent=2))
+        data = _as_json(year, mode, report, tax, issues, exact)
+        data["invoices_total"] = str(invoices.total)
+        data["invoices"] = [
+            {
+                "file": row.invoice.source.name,
+                "number": row.invoice.number,
+                "paid": row.payment_date.isoformat() if row.payment_date else None,
+                "amount": str(row.invoice.signed_amount) if row.invoice.signed_amount is not None else None,
+                "counted": row.counted,
+                "rate_id": row.rate_id,
+            }
+            for row in invoices.rows
+        ]
+        print(json.dumps(data, ensure_ascii=False, indent=2))
     else:
         _print_text(year, mode, report, tax, issues, exact, rules.tax_year)
+        if invoices.rows:
+            print(f"  Issued invoices: {len(invoices.counted)} counted, {format_czk(invoices.total, 2)}")
     return 0
 
 
@@ -75,6 +104,7 @@ def _parser() -> argparse.ArgumentParser:
         help="assign statements by period (default) or by expected payout",
     )
     p.add_argument("--recursive", action="store_true", help="search subfolders too")
+    p.add_argument("--my-ico", help="your IČO (invoices issued by others are ignored)")
     p.add_argument("--update-rules", action="store_true", help="download newer rules first")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     return p

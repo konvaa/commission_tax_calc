@@ -20,7 +20,7 @@ from ..core.aggregator import YearReport
 from ..core.issues import Issue, Severity
 from ..core.money import format_czk
 from ..core.rules import text
-from ..core.tax import TaxSummary
+from ..core.tax import INVOICES_LABEL, UNASSIGNED_INVOICES_LABEL, TaxSummary
 from .issue_texts import issue_text, severity_text
 
 SORT_ROLE = Qt.ItemDataRole.UserRole + 1
@@ -199,9 +199,19 @@ class TaxModel(QAbstractTableModel):
             for line in self._summary.lines
         ]
         rows += [
-            ("?", category, amount, None, None, None) for category, amount in self._summary.unmapped.items()
+            ("?", self._activity_label(category), amount, None, None, None)
+            for category, amount in self._summary.unmapped.items()
         ]
         return rows
+
+    def _activity_label(self, category: str) -> str:
+        # Invoice pseudo-categories come from the core in Czech; translate
+        # them here. Statement headings are quoted from the PDF as they are.
+        if category == INVOICES_LABEL:
+            return self.tr("Issued invoices")
+        if category == UNASSIGNED_INVOICES_LABEL:
+            return self.tr("Invoices without a flat rate")
+        return category
 
     def rowCount(self, parent: _Index = _ROOT) -> int:
         return 0 if parent.isValid() else len(self._lines())
@@ -236,7 +246,8 @@ class TaxModel(QAbstractTableModel):
             if line is None:
                 return self.tr("Unknown activity type - choose a rate in the dialog.")
             tip = [text(line.rate.description, self.language), line.rate.legal_ref]
-            tip.append(self.tr("Activities in statements:") + " " + "; ".join(line.activities))
+            labels = "; ".join(self._activity_label(a) for a in line.activities)
+            tip.append(self.tr("Sources of income:") + " " + labels)
             if line.capped:
                 tip.append(self.tr("Income exceeds the cap; expenses are limited."))
             return "\n".join(t for t in tip if t)

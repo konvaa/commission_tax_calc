@@ -14,6 +14,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QCoreApplication, QSettings, Qt  # noqa: E402
 
+from commission_tax_calc.core.invoice_store import InvoiceStore  # noqa: E402
 from commission_tax_calc.core.issues import Issue, IssueCode, Severity  # noqa: E402
 from commission_tax_calc.core.loader import LoadResult  # noqa: E402
 from commission_tax_calc.core.money import format_czk  # noqa: E402
@@ -34,9 +35,10 @@ def window(qtbot, qapp, tmp_path):
     QCoreApplication.setOrganizationName("test")
     QCoreApplication.setApplicationName("commission-tax-calc-tests")
     QSettings().setValue("rules/update_policy", "never")
+    QSettings().setValue("ares/policy", "never")
     i18n = LanguageManager(qapp)
     i18n.set_language("en")
-    win = MainWindow(i18n, RulesRepository(None))
+    win = MainWindow(i18n, RulesRepository(None), InvoiceStore(tmp_path / "invoices.json"))
     qtbot.addWidget(win)
     yield win
     i18n.set_language("en")
@@ -44,7 +46,7 @@ def window(qtbot, qapp, tmp_path):
 
 def load(win: MainWindow, statements, failures=()):
     # Bypass the worker thread: tests the computing/display path directly.
-    win._loaded = LoadResult(list(statements), list(failures))
+    win._loaded = LoadResult(statements=list(statements), failures=list(failures))
     win._refresh_years()
 
 
@@ -142,3 +144,84 @@ def test_czech_translation_is_complete():
     ]
     assert unfinished == []
     assert (resources.files("commission_tax_calc") / "translations" / "app_cs.qm").is_file()
+
+
+# ----------------------------------------------------------------- invoices ---
+
+
+def own_invoice(number, text="Montáž elektroinstalace", amount=10000, **changes):
+    from commission_tax_calc.core.isdoc import parse_isdoc
+    from factory import InvoiceSpec, make_isdoc
+
+    spec = InvoiceSpec(number=number, lines=[(text, amount)], **changes)
+    return parse_isdoc(make_isdoc(spec), Path(f"{number}.pdf"))
+
+
+def load_invoices(win: MainWindow, invoices):
+    from factory import SUPPLIER_ICO
+
+    win._store.my_ico = SUPPLIER_ICO
+    win._loaded = LoadResult(invoices=list(invoices))
+    win._refresh_years()
+
+
+def test_invoices_tab_and_manual_rate(window):
+    from commission_tax_calc.gui.invoice_table_models import InvoicesModel
+
+    load_invoices(window, [own_invoice("2030001"), own_invoice("2030002", "Pronájem lešení", 5000)])
+    model = window.invoices_panel.model
+    assert model.rowCount() == 2
+    assert window.base_value.text() == format_czk(Decimal(15000))  # no rate yet -> no expenses
+    model.setData(model.index(0, InvoicesModel.RATE), "trades", Qt.ItemDataRole.EditRole)
+    assert list(window._store.manual_rates.values()) == ["trades"]
+    assert window.expenses_value.text() == format_czk(Decimal(6000))
+    assert (window._store.path).is_file()  # decisions are persisted immediately
+
+
+def test_group_rate_applies_to_all_members_and_is_remembered(window):
+    from commission_tax_calc.gui.invoice_table_models import GroupsModel
+
+    load_invoices(
+        window,
+        [
+            own_invoice("2030001", "Montáž elektroinstalace, Lužná"),
+            own_invoice("2030002", "Montáž elektroinstalace, Lhota"),
+        ],
+    )
+    groups = window.invoices_panel.groups_model
+    assert groups.rowCount() == 1
+    groups.setData(groups.index(0, GroupsModel.RATE), "crafts_agriculture", Qt.ItemDataRole.EditRole)
+    assert set(window._store.manual_rates.values()) == {"crafts_agriculture"}
+    assert len(window._store.profiles) == 1
+    assert window.expenses_value.text() == format_czk(Decimal(16000))
+
+    # A new similar invoice is assigned automatically and flagged.
+    load_invoices(window, [own_invoice("2030003", "Montáž elektroinstalace, Frenštát")])
+    row = window._invoice_report.rows[0]
+    assert (row.rate_id, row.rate_source) == ("crafts_agriculture", "group")
+
+
+def test_payment_date_edit_moves_invoice_to_other_year(window):
+    from PySide6.QtCore import QDate
+
+    from commission_tax_calc.gui.invoice_table_models import InvoicesModel
+
+    load_invoices(window, [own_invoice("2030001")])
+    model = window.invoices_panel.model
+    model.setData(model.index(0, InvoicesModel.PAID), QDate(2031, 1, 10), Qt.ItemDataRole.EditRole)
+    assert window.year_combo.findData(2031) >= 0
+    assert window.year_combo.findData(2030) == -1
+
+
+def test_review_dialog_returns_corrected_values(qtbot):
+    from commission_tax_calc.gui.review_dialog import ReviewDialog
+
+    invoice = own_invoice("2030001")
+    dialog = ReviewDialog(invoice)
+    qtbot.addWidget(dialog)
+    dialog.amount.setText("12 345,60")
+    dialog.number.setText("2030009")
+    values = dialog.values()
+    assert values["amount"] == Decimal("12345.60")
+    assert values["number"] == "2030009"
+    assert values["supplier_ico"] == invoice.supplier_ico

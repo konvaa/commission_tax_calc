@@ -59,6 +59,26 @@ class ActivityMapping:
 
 
 @dataclass(frozen=True)
+class TradeClassification:
+    """How trades from the Trade Licensing Register (RŽP) map to rates.
+
+    Only *craft* trades (annex 1 of the Trade Licensing Act) get 80 %; every
+    other trade - unqualified, qualified, licensed - gets 60 %. Listing the 41
+    craft trades is therefore enough to classify any trade by its name, which
+    is more robust than relying on ARES code values that are not documented.
+    """
+
+    craft_rate_id: str
+    default_rate_id: str
+    craft_trades: frozenset[str]  # casefolded names
+    sources: tuple[Source, ...] = ()
+
+    def rate_id_for_trade(self, subject: str) -> str:
+        name = " ".join(subject.split()).casefold()
+        return self.craft_rate_id if name in self.craft_trades else self.default_rate_id
+
+
+@dataclass(frozen=True)
 class RuleSet:
     tax_year: int
     revision: int
@@ -69,6 +89,9 @@ class RuleSet:
     sources: tuple[Source, ...]
     note: dict[str, str]
     origin: str = "bundled"  # "bundled" | "cache" - shown in the rules dialog
+    # Optional (added in revision 2). Older apps ignore the key, so adding it
+    # did not require a new schema_version.
+    trades: TradeClassification | None = None
 
     def rate(self, rate_id: str) -> RateCategory | None:
         return next((r for r in self.rates if r.id == rate_id), None)
@@ -121,7 +144,9 @@ def parse_rules(data: Any, origin: str = "bundled") -> RuleSet:
         if unknown:
             raise RulesError(f"mapping refers to unknown rate(s): {sorted(unknown)}")
         sources = tuple(Source(_localized(s["label"]), _https(s["url"])) for s in data["sources"])
+        trades = _trade_classification(data.get("trade_classification"), ids)
         return RuleSet(
+            trades=trades,
             tax_year=int(data["tax_year"]),
             revision=int(data["revision"]),
             updated=str(data.get("updated", "")),
@@ -136,6 +161,19 @@ def parse_rules(data: Any, origin: str = "bundled") -> RuleSet:
         raise
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         raise RulesError(f"invalid rules file: {exc!r}") from exc
+
+
+def _trade_classification(data: Any, rate_ids: set[str]) -> TradeClassification | None:
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise RulesError("trade_classification must be an object")
+    craft, default = str(data["craft_rate_id"]), str(data["default_rate_id"])
+    if not {craft, default} <= rate_ids:
+        raise RulesError("trade_classification refers to an unknown rate")
+    names = frozenset(" ".join(str(n).split()).casefold() for n in data.get("craft_trades", []))
+    sources = tuple(Source(_localized(s["label"]), _https(s["url"])) for s in data.get("sources", []))
+    return TradeClassification(craft, default, names, sources)
 
 
 def _decimal(value: Any, minimum: float, maximum: float | None = None) -> Decimal:

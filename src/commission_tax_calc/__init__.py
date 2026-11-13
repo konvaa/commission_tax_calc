@@ -8,4 +8,4 @@ The package is split into two layers on purpose:
 * ``commission_tax_calc.gui`` - a thin PySide6 front-end on top of the core.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

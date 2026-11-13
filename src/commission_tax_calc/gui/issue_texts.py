@@ -70,6 +70,52 @@ def _templates() -> dict[IssueCode, str]:
             "Issues",
             "No flat-rate rules for {year}; using rules for {used_year}. Check for an update.",
         ),
+        IssueCode.UNKNOWN_DOCUMENT: QCoreApplication.translate(
+            "Issues", "Not recognized as a commission statement or an invoice."
+        ),
+        IssueCode.OCR_UNAVAILABLE: QCoreApplication.translate(
+            "Issues", "Scanned document, but OCR is not available ({reason}). Enter the values by hand."
+        ),
+        IssueCode.MY_ICO_UNKNOWN: QCoreApplication.translate(
+            "Issues", "Your IČO is not set - all invoices are treated as issued by you."
+        ),
+        IssueCode.INVOICE_RECEIVED: QCoreApplication.translate(
+            "Issues", "Invoice {number} was issued to you by {supplier} - not counted."
+        ),
+        IssueCode.INVOICE_NEEDS_REVIEW: QCoreApplication.translate(
+            "Issues", "Invoice {number} was read from {origin} - check and confirm its values."
+        ),
+        IssueCode.INVOICE_ADVANCE: QCoreApplication.translate(
+            "Issues", "Advance document {number} - not counted (the final invoice is counted)."
+        ),
+        IssueCode.INVOICE_DUPLICATE: QCoreApplication.translate(
+            "Issues", "Duplicate of {original} - counted only once."
+        ),
+        IssueCode.INVOICE_CONFLICT: QCoreApplication.translate(
+            "Issues",
+            "Invoice number {number} appears twice with different amounts ({amount} vs {other_amount}).",
+        ),
+        IssueCode.INVOICE_NO_AMOUNT: QCoreApplication.translate(
+            "Issues", "Invoice {number}: the amount could not be read - not counted until confirmed."
+        ),
+        IssueCode.INVOICE_NO_DATE: QCoreApplication.translate(
+            "Issues", "Invoice {number}: no date found - the tax year cannot be determined."
+        ),
+        IssueCode.INVOICE_PAYMENT_UNCONFIRMED: QCoreApplication.translate(
+            "Issues",
+            "Invoice {number} was issued in {issue_year}, but its due date {due} falls in {year}. "
+            "Confirm the actual payment date.",
+        ),
+        IssueCode.INVOICE_NUMBER_GAP: QCoreApplication.translate(
+            "Issues", "Invoice number(s) {missing} missing in the sequence."
+        ),
+        IssueCode.INVOICES_UNASSIGNED: QCoreApplication.translate(
+            "Issues", "{count} invoice(s) without a flat-rate category ({amount})."
+        ),
+        IssueCode.INVOICES_AUTO_ASSIGNED: QCoreApplication.translate(
+            "Issues",
+            "{count} invoice(s) got their rate automatically from a remembered group - please check.",
+        ),
     }
 
 
@@ -79,10 +125,18 @@ def mode_label(mode_value: str) -> str:
     return QCoreApplication.translate("Issues", "by period")
 
 
+def origin_label(origin: str) -> str:
+    if origin == "ocr":
+        return QCoreApplication.translate("Issues", "a scan (OCR)")
+    return QCoreApplication.translate("Issues", "the PDF text")
+
+
 def issue_text(issue: Issue) -> str:
     params = {k: str(v) for k, v in issue.params.items()}
     if "mode" in params:
         params["mode"] = mode_label(params["mode"])
+    if "origin" in params:
+        params["origin"] = origin_label(params["origin"])
     template = _templates().get(issue.code)
     if template is None:
         return issue.message()

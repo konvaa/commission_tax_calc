@@ -1,11 +1,13 @@
-"""Generate a folder of fictitious statements to try the app without real data.
+"""Generate a folder of fictitious documents to try the app without real data.
 
     pip install reportlab
-    python scripts/make_demo_statements.py demo_statements
+    python scripts/make_demo_data.py demo_data
 
-The demo year deliberately contains the situations the app should catch:
-a missing half-month, a re-downloaded duplicate and a late-December statement.
-All names and numbers are invented.
+Commission statements: a missing half-month, a re-downloaded duplicate and a
+late-December statement. Invoices: two kinds of work for two customers (so the
+grouping has something to do), a credit note, an invoice without ISDOC (read
+from the PDF text) and a scanned invoice (read by OCR).
+All names, IČOs and numbers are invented.
 """
 
 from __future__ import annotations
@@ -17,7 +19,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 
-from factory import Spec, find_font, make_pdf, make_text  # noqa: E402
+from factory import (  # noqa: E402
+    CUSTOMER_A,
+    CUSTOMER_B,
+    InvoiceSpec,
+    Spec,
+    find_font,
+    make_invoice_pdf,
+    make_pdf,
+    make_scanned_pdf,
+    make_text,
+)
 
 CLIENTS = ["Nováková Eva", "Svoboda Karel", "Dvořák Pavel", "Černá Lucie", "Procházka Jan"]
 PRODUCTS = [
@@ -74,8 +86,50 @@ def main(target: str = "demo_statements", year: int = 2025) -> int:
         make_pdf(out / name, make_text(spec), font)
         if (start.month, start.day) == (3, 1):
             make_pdf(out / name.replace(".pdf", " (1).pdf"), make_text(spec), font)  # re-download
-    print(f"Demo statements written to {out.resolve()}")
+    make_demo_invoices(out, year, font, rng)
+    print(f"Demo data written to {out.resolve()}")
     return 0
+
+
+ELECTRICAL = ["Montáž elektroinstalace", "Revize elektroinstalace", "Výměna rozvaděče"]
+DESIGN = ["Projektová dokumentace přípojky NN", "Projektová dokumentace rozvodů"]
+PLACES = ["Lužná", "Doubrava", "Hlinka", "Nová Pláň", "Lhota", "Medlov", "Trojanovice", "Kunčice"]
+
+
+def make_demo_invoices(out: Path, year: int, font: Path, rng: random.Random) -> None:
+    number = 1
+    for month in range(1, 13):
+        kind, customer = (ELECTRICAL, CUSTOMER_A) if month % 3 else (DESIGN, CUSTOMER_B)
+        issue = date(year, month, rng.randint(3, 25))
+        spec = InvoiceSpec(
+            number=f"{year}{number:04d}",
+            supplier_name="Ukázkový Poradce",
+            customer_ico=customer[0],
+            customer_name=customer[1],
+            issue=issue,
+            due=issue + timedelta(days=14),
+            lines=[
+                (f"{rng.choice(kind)}, {rng.choice(PLACES)}", rng.randint(20, 160) * 100)
+                for _ in range(rng.randint(1, 3))
+            ],
+        )
+        name = f"faktura-{spec.number}.pdf"
+        if month == 5:
+            make_invoice_pdf(out / name, spec, font, embed_isdoc=False)  # no ISDOC -> text heuristics
+        elif month == 8:
+            make_scanned_pdf(out / name, spec, font)  # a scan -> OCR
+        else:
+            make_invoice_pdf(out / name, spec, font)
+        number += 1
+    credit = InvoiceSpec(
+        number=f"{year}{number:04d}",
+        supplier_name="Ukázkový Poradce",
+        doc_type=2,
+        issue=date(year, 11, 20),
+        due=date(year, 11, 30),
+        lines=[("Sleva za reklamaci, Lužná", 2500)],
+    )
+    make_invoice_pdf(out / f"dobropis-{credit.number}.pdf", credit, font)
 
 
 if __name__ == "__main__":

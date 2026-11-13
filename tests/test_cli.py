@@ -10,8 +10,9 @@ from factory import Spec, make_text
 
 def fake_load(monkeypatch, tmp_path, specs):
     statements = [parse_text(make_text(s), source=Path(f"{i}.pdf")) for i, s in enumerate(specs)]
-    monkeypatch.setattr(cli, "load_statements", lambda paths: LoadResult(statements, []))
+    monkeypatch.setattr(cli, "load_documents", lambda paths, my_ico=None: LoadResult(statements=statements))
     monkeypatch.setattr(cli, "rules_cache_dir", lambda: tmp_path / "cache")
+    monkeypatch.setattr(cli, "user_data_dir", lambda: tmp_path / "data")
 
 
 def test_cli_json(monkeypatch, tmp_path, capsys):

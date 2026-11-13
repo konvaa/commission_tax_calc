@@ -1,13 +1,14 @@
 """Main application window.
 
-The window holds *state* (folder, loaded statements, selected year/mode,
-manual overrides) and wires widgets to core functions. All calculations are
+The window holds *state* (folder, loaded documents, selected year/mode,
+manual overrides, the invoice store) and wires widgets to core functions. All calculations are
 delegated to ``core``; the window only decides *when* to recompute.
 """
 
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 
 import shiboken6
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
     QTableView,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -39,16 +41,24 @@ from PySide6.QtWidgets import (
 
 from .. import __version__
 from ..core.aggregator import YearMode, YearReport, available_years, build_report
+from ..core.ares import AresInfo, suggested_rate_ids
+from ..core.grouping import profile_from_group, similar
+from ..core.ico import is_valid
+from ..core.invoice_report import InvoiceReport, build_invoice_report, detect_my_ico, invoice_years
+from ..core.invoice_store import InvoiceStore
 from ..core.issues import Issue, IssueCode, Severity
 from ..core.loader import LoadResult
 from ..core.money import format_czk
+from ..core.paths import user_data_dir
 from ..core.rules import RuleSet, RulesRepository, UpdateResult, text
-from ..core.tax import TaxSummary, compute
+from ..core.tax import UNASSIGNED_INVOICES_LABEL, TaxSummary, compute
 from .i18n import LANGUAGES, LanguageManager
+from .invoices_panel import InvoicesPanel
 from .issue_texts import issue_text, severity_text
+from .review_dialog import ReviewDialog
 from .rules_dialog import RulesDialog
 from .table_models import SORT_ROLE, StatementsModel, TaxModel, severity_icon
-from .workers import LoadWorker, RulesUpdateWorker, start_in_thread
+from .workers import AresWorker, LoadWorker, RulesUpdateWorker, start_in_thread
 
 _KEY_FOLDER = "ui/last_folder"
 _KEY_MODE = "ui/year_mode"
@@ -57,10 +67,13 @@ _KEY_GEOMETRY = "ui/geometry"
 _KEY_SPLITTER = "ui/splitter"
 _KEY_OVERRIDES = "rules/overrides"
 _KEY_POLICY = "rules/update_policy"
+_KEY_ARES_POLICY = "ares/policy"
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, i18n: LanguageManager, repository: RulesRepository) -> None:
+    def __init__(
+        self, i18n: LanguageManager, repository: RulesRepository, store: InvoiceStore | None = None
+    ) -> None:
         super().__init__()
         self._i18n = i18n
         self._repo = repository
@@ -80,6 +93,13 @@ class MainWindow(QMainWindow):
         self._loading_worker: LoadWorker | None = None
         self._updating = False
         self._update_interactive = False
+        # Invoice decisions (own IČO, rates, payment dates, corrections) live in
+        # a JSON file shared with the CLI; see core/invoice_store.py.
+        self._store = store or InvoiceStore.load(user_data_dir() / "invoices.json")
+        self._invoice_report: InvoiceReport | None = None
+        self._ares_running = False
+        self._ares_interactive = False
+        self._ico_asked = False
 
         self._build_ui()
         self.setAcceptDrops(True)
@@ -173,10 +193,32 @@ class MainWindow(QMainWindow):
         for col in range(1, 6):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
 
-        self.statements_box = QGroupBox()
+        self.statements_box = QWidget()
         statements_layout = QVBoxLayout(self.statements_box)
-        statements_layout.addWidget(self.folder_label)
+        statements_layout.setContentsMargins(4, 4, 4, 4)
         statements_layout.addWidget(self.statements_view)
+
+        # -- invoices ----------------------------------------------------
+        self.invoices_panel = InvoicesPanel()
+        self.invoices_panel.change_ico_requested.connect(lambda: self._ask_my_ico(force=True))
+        self.invoices_panel.ares_requested.connect(lambda: self._start_ares(interactive=True))
+        self.invoices_panel.review_requested.connect(self._review_invoice)
+        self.invoices_panel.rates_requested.connect(self._set_rates)
+        self.invoices_panel.payments_confirm_requested.connect(self._confirm_payments)
+        self.invoices_panel.model.rate_edited.connect(self._set_rates)
+        self.invoices_panel.model.payment_edited.connect(self._set_payment)
+        self.invoices_panel.groups_model.group_rate_edited.connect(self._set_group_rate)
+
+        # Statements and invoices are two tabs over one shared summary: both
+        # feed the same tax computation.
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self.statements_box, "")
+        self.tabs.addTab(self.invoices_panel, "")
+        top = QWidget()
+        top_layout = QVBoxLayout(top)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.addWidget(self.folder_label)
+        top_layout.addWidget(self.tabs)
 
         # -- tax summary -------------------------------------------------
         self.tax_model = TaxModel(self)
@@ -201,10 +243,15 @@ class MainWindow(QMainWindow):
         for label in (self.income_value, self.expenses_value, self.base_value):
             label.setFont(bold)
             label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.invoices_value = QLabel("—")
+        self.invoices_value.setFont(bold)
+        self.invoices_value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.invoices_caption = QLabel()
         self.total_caption = QLabel()
         self.income_caption, self.expenses_caption, self.base_caption = QLabel(), QLabel(), QLabel()
         totals = QFormLayout()
         totals.addRow(self.total_caption, self.total_value)
+        totals.addRow(self.invoices_caption, self.invoices_value)
         totals.addRow(self.income_caption, self.income_value)
         totals.addRow(self.expenses_caption, self.expenses_value)
         totals.addRow(self.base_caption, self.base_value)
@@ -243,7 +290,7 @@ class MainWindow(QMainWindow):
         bottom.setSizes([560, 600])
 
         self.splitter = QSplitter(Qt.Orientation.Vertical)
-        self.splitter.addWidget(self.statements_box)
+        self.splitter.addWidget(top)
         self.splitter.addWidget(bottom)
         self.splitter.setSizes([330, 400])
         self.setCentralWidget(self.splitter)
@@ -267,7 +314,9 @@ class MainWindow(QMainWindow):
     def retranslate_ui(self) -> None:
         self.setWindowTitle(self.tr("Commission Tax Calc") + f" {__version__}")
         self.open_action.setText(self.tr("Open folder…"))
-        self.open_action.setToolTip(self.tr("Choose the folder with downloaded statements (Ctrl+O)"))
+        self.open_action.setToolTip(
+            self.tr("Choose the folder with commission statements and invoices (Ctrl+O)")
+        )
         self.reload_action.setText(self.tr("Reload"))
         self.rules_action.setText(self.tr("Rules…"))
         self.rules_action.setToolTip(self.tr("Show flat-rate expense rules and their sources"))
@@ -279,10 +328,12 @@ class MainWindow(QMainWindow):
             self.tr(
                 "Statements contain only the period, not the payout date.\n"
                 "'Expected payout' moves a statement ending on 31 December to the next year,\n"
-                "because it is paid out in January. Check with your accountant which applies."
+                "because it is paid out in January. Check with your accountant which applies.\n"
+                "Invoices are always assigned by their payment date."
             )
         )
         self.total_caption.setText(self.tr("Commission total (Provize celkem):"))
+        self.invoices_caption.setText(self.tr("Issued invoices (by payment date):"))
         self.income_caption.setText(self.tr("Income § 7:"))
         self.expenses_caption.setText(self.tr("Flat-rate expenses:"))
         self.base_caption.setText(self.tr("Partial tax base § 7:"))
@@ -294,7 +345,7 @@ class MainWindow(QMainWindow):
             )
         )
         self.issues_table.setHorizontalHeaderLabels(
-            [self.tr("Severity"), self.tr("Statement"), self.tr("Message")]
+            [self.tr("Severity"), self.tr("Document"), self.tr("Message")]
         )
         self.show_info_check.setText(self.tr("Show informational notes"))
         self.statements_model.retranslate()
@@ -309,7 +360,7 @@ class MainWindow(QMainWindow):
     # ======================================================= loading ==
     def choose_folder(self) -> None:
         start = str(self._folder) if self._folder else ""
-        folder = QFileDialog.getExistingDirectory(self, self.tr("Folder with statements"), start)
+        folder = QFileDialog.getExistingDirectory(self, self.tr("Folder with statements and invoices"), start)
         if folder:
             self.load_folder(Path(folder))
 
@@ -323,7 +374,7 @@ class MainWindow(QMainWindow):
         self._folder = folder
         self._settings.setValue(_KEY_FOLDER, str(folder))
         self._set_busy(True)
-        worker = LoadWorker(folder)
+        worker = LoadWorker(folder, self._store.my_ico)
         worker.progress.connect(self._on_progress)
         worker.finished.connect(self._on_loaded)
         self._loading_worker = worker
@@ -351,12 +402,15 @@ class MainWindow(QMainWindow):
         self._loaded = result
         self._set_busy(False)
         self.statusBar().showMessage(
-            self.tr("Read {0} statement(s), {1} failed.").format(
-                len(result.statements), len(result.failures)
+            self.tr("Read {0} statement(s) and {1} invoice(s), {2} problem(s).").format(
+                len(result.statements), len(result.invoices), len(result.failures)
             ),
             8000,
         )
         self._refresh_years()
+        if result.invoices:
+            # Deferred: let the window repaint with the results before asking.
+            QTimer.singleShot(0, self._after_invoices_loaded)
 
     def _set_busy(self, busy: bool) -> None:
         self.progress.setVisible(busy)
@@ -374,7 +428,8 @@ class MainWindow(QMainWindow):
 
     def _refresh_years(self) -> None:
         statements = self._loaded.statements if self._loaded else []
-        years = available_years(statements, self._mode())
+        invoices = self._loaded.invoices if self._loaded else []
+        years = sorted(set(available_years(statements, self._mode())) | invoice_years(invoices, self._store))
         previous = self.year_combo.currentData() or self._settings.value(_KEY_YEAR, 0, type=int)
         self.year_combo.blockSignals(True)  # avoid recomputing for every addItem
         self.year_combo.clear()
@@ -387,16 +442,35 @@ class MainWindow(QMainWindow):
 
     def _recompute(self) -> None:
         year = self.year_combo.currentData()
-        self._report = self._tax = self._rules = None
+        self._report = self._tax = self._rules = self._invoice_report = None
         if self._loaded is not None and year is not None:
             self._settings.setValue(_KEY_YEAR, year)
             self._report = build_report(self._loaded.statements, year, self._mode())
             self._rules, self._rules_exact = self._repo.get(year)
+            ares_rates = self._ares_rate_ids(year)
+            self._invoice_report = build_invoice_report(self._loaded.invoices, year, self._store, ares_rates)
             if self._rules is not None:
-                self._tax = compute(self._report.activity_totals, self._rules, self._overrides)
+                self._tax = self._compute_tax()
                 if self._tax.unmapped and self._ask_unknown_activities(self._tax, self._rules):
-                    self._tax = compute(self._report.activity_totals, self._rules, self._overrides)
+                    self._tax = self._compute_tax()
         self._update_views()
+
+    def _compute_tax(self) -> TaxSummary:
+        invoices = self._invoice_report
+        return compute(
+            self._report.activity_totals,
+            self._rules,
+            self._overrides,
+            invoices.rate_income if invoices else None,
+            invoices.unassigned if invoices else 0,
+        )
+
+    def _ares_rate_ids(self, year: int) -> set[str] | None:
+        info = self._store.ares.get(self._store.my_ico or "")
+        rules, _ = self._repo.get(year)
+        if info is None or rules is None:
+            return None
+        return suggested_rate_ids(info, rules, date(year, 12, 31))
 
     def _ask_unknown_activities(self, tax: TaxSummary, rules: RuleSet) -> bool:
         """Ask once per session for each activity type the rules don't know.
@@ -409,7 +483,8 @@ class MainWindow(QMainWindow):
         choices = [f"{r.percent} % – {text(r.name, lang)}" for r in rules.rates]
         changed = False
         for category, amount in tax.unmapped.items():
-            if category in self._asked_categories:
+            # Unassigned invoices are handled in the Invoices tab, not here.
+            if category in self._asked_categories or category == UNASSIGNED_INVOICES_LABEL:
                 continue
             self._asked_categories.add(category)
             choice, ok = QInputDialog.getItem(
@@ -445,12 +520,23 @@ class MainWindow(QMainWindow):
 
         counted = len(self._report.counted) if self._report else 0
         shown = len(self._report.rows) if self._report else 0
-        self.statements_box.setTitle(self.tr("Statements ({0} counted of {1})").format(counted, shown))
+        self.tabs.setTabText(0, self.tr("Commission statements ({0} of {1})").format(counted, shown))
+        invoices = self._invoice_report
+        self.tabs.setTabText(
+            1,
+            self.tr("Invoices ({0} of {1})").format(
+                len(invoices.counted) if invoices else 0, len(invoices.rows) if invoices else 0
+            ),
+        )
+        self.invoices_panel.set_data(
+            invoices, self._rules, self._i18n.language, self._store.my_ico, self._ares_text()
+        )
 
         if self._report is not None:
             self.total_value.setText(format_czk(self._report.total))
         else:
             self.total_value.setText("—")
+        self.invoices_value.setText(format_czk(invoices.total, 2) if invoices else "—")
         if self._tax is not None:
             self.income_value.setText(format_czk(self._tax.income))
             self.expenses_value.setText(format_czk(self._tax.expenses))
@@ -475,6 +561,8 @@ class MainWindow(QMainWindow):
         issues: list[Issue] = list(self._loaded.failures) if self._loaded else []
         if self._report is not None:
             issues += self._report.all_issues()
+        if self._invoice_report is not None:
+            issues += self._invoice_report.all_issues()
         if self._tax is not None:
             issues += self._tax.issues
         if self._rules is not None and not self._rules_exact and self._report is not None:
@@ -495,6 +583,12 @@ class MainWindow(QMainWindow):
         # Show the statement *period* rather than the long file name - it is
         # shorter and it is what the user thinks in ("the 2nd half of Nov").
         periods = {st.source: str(st.period) for st in (self._loaded.statements if self._loaded else [])}
+        periods.update(
+            {
+                inv.source: inv.number or inv.source.name
+                for inv in (self._loaded.invoices if self._loaded else [])
+            }
+        )
         self.issues_table.setRowCount(len(issues))
         for row, issue in enumerate(issues):
             severity = QTableWidgetItem(severity_icon(issue.severity), severity_text(issue.severity))
@@ -513,6 +607,176 @@ class MainWindow(QMainWindow):
         self.issues_table.resizeRowsToContents()
         problems = sum(1 for i in self._current_issues() if i.severity > Severity.INFO)
         self.issues_box.setTitle(self.tr("Findings ({0} to check)").format(problems))
+
+    # ===================================================== invoices ==
+    def _after_invoices_loaded(self) -> None:
+        if not self._store.my_ico and not self._ico_asked:
+            self._ask_my_ico()
+        if self._store.my_ico and self._store.my_ico not in self._store.ares:
+            self._maybe_start_ares()
+
+    def _ask_my_ico(self, force: bool = False) -> None:
+        """Confirm the user's own IČO; invoices issued by others are ignored.
+
+        The detected value is only a proposal - the user confirms or edits it.
+        """
+        self._ico_asked = True
+        invoices = self._loaded.invoices if self._loaded else []
+        proposal = self._store.my_ico or detect_my_ico(invoices) or ""
+        name = next((i.supplier_name for i in invoices if i.supplier_ico == proposal and i.supplier_name), "")
+        prompt = self.tr("Your IČO (as the supplier on your issued invoices):")
+        if name and not force:
+            prompt = self.tr("Found invoices issued by {0}. Is this your IČO?").format(name)
+        while True:
+            value, ok = QInputDialog.getText(self, self.tr("My IČO"), prompt, text=proposal)
+            if not ok:
+                return
+            value = value.strip()
+            if is_valid(value):
+                break
+            QMessageBox.warning(self, self.tr("My IČO"), self.tr("{0} is not a valid IČO.").format(value))
+            proposal = value
+        self._store.my_ico = value
+        self._save_store()
+        self._refresh_years()
+        if value not in self._store.ares:
+            self._maybe_start_ares()
+
+    def _maybe_start_ares(self) -> None:
+        policy = self._settings.value(_KEY_ARES_POLICY, "ask", type=str)
+        if policy == "never":
+            return
+        if policy == "ask":
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setWindowTitle(self.tr("Trades from ARES"))
+            box.setText(self.tr("Look up your trades in the public register ARES?"))
+            box.setInformativeText(
+                self.tr(
+                    "From your trades the app can suggest the flat-rate percentage of your invoices. "
+                    "Only your IČO is sent to ares.gov.cz."
+                )
+            )
+            box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            remember = QCheckBox(self.tr("Remember my choice"))
+            box.setCheckBox(remember)
+            yes = box.exec() == QMessageBox.StandardButton.Yes
+            if remember.isChecked():
+                self._settings.setValue(_KEY_ARES_POLICY, "always" if yes else "never")
+            if not yes:
+                return
+        self._start_ares(interactive=False)
+
+    def _start_ares(self, interactive: bool) -> None:
+        if self._ares_running or not self._store.my_ico:
+            return
+        self._ares_running = True
+        self._ares_interactive = interactive
+        self.statusBar().showMessage(self.tr("Looking up trades in ARES…"))
+        worker = AresWorker(self._store.my_ico)
+        worker.finished.connect(self._on_ares_done)
+        worker.failed.connect(self._on_ares_failed)
+        self._start_job(worker)
+
+    def _on_ares_done(self, info: AresInfo) -> None:
+        self._ares_running = False
+        self._store.ares[info.ico] = info
+        self._save_store()
+        self.statusBar().showMessage(self.tr("ARES: {0} trade(s) found.").format(len(info.trades)), 8000)
+        self._recompute()
+
+    def _on_ares_failed(self, error: str) -> None:
+        self._ares_running = False
+        message = self.tr("ARES lookup failed: {0}").format(error)
+        self.statusBar().showMessage(message, 10000)
+        if self._ares_interactive:
+            QMessageBox.warning(self, self.tr("Trades from ARES"), message)
+
+    def _ares_text(self) -> str:
+        info = self._store.ares.get(self._store.my_ico or "")
+        if info is None:
+            return self.tr("ARES: not looked up yet")
+        year = self.year_combo.currentData() or date.today().year
+        rates = self._ares_rate_ids(year) or set()
+        trades = info.active_trades(date(year, 12, 31))
+        names = "; ".join(t.subject for t in trades) or self.tr("no active trade")
+        if len(rates) == 1 and self._rules is not None:
+            rate = self._rules.rate(next(iter(rates)))
+            summary = self.tr("all lead to {0} % – applied automatically").format(
+                rate.percent if rate else "?"
+            )
+        elif len(rates) > 1:
+            summary = self.tr("different rates – assign groups below")
+        else:
+            summary = self.tr("no suggestion")
+        return self.tr("ARES ({0}): {1} → {2}").format(info.fetched.strftime("%d.%m.%Y"), names, summary)
+
+    def _set_rates(self, keys: list, rate_id) -> None:
+        for key in keys:
+            if rate_id:
+                self._store.manual_rates[key] = rate_id
+            else:
+                self._store.manual_rates.pop(key, None)
+        self._save_store()
+        self._recompute()
+
+    def _set_group_rate(self, group_id: str, rate_id) -> None:
+        """Set the rate for all invoices of a group and remember the group.
+
+        The current invoices get the rate as a manual choice (the user just
+        made it). The remembered profile is for *future* invoices - those are
+        flagged "group (auto)" so the user notices them.
+        """
+        report = self._invoice_report
+        group = next((g for g in report.groups if g.id == group_id), None) if report else None
+        if group is None:
+            return
+        for invoice in group.invoices:
+            if rate_id:
+                self._store.manual_rates[invoice.key] = rate_id
+            else:
+                self._store.manual_rates.pop(invoice.key, None)
+        profile = profile_from_group(group, rate_id) if rate_id else None
+        # Replace profiles describing the same kind of invoices, so changing a
+        # group's rate does not leave a contradicting old profile behind.
+        self._store.profiles = [
+            p
+            for p in self._store.profiles
+            if not similar(p.tokens, p.customer_ico, group.token_union, group.customer_ico)
+        ] + ([profile] if profile else [])
+        self._save_store()
+        self._recompute()
+
+    def _set_payment(self, key: str, paid: date) -> None:
+        self._store.payment_dates[key] = paid
+        self._save_store()
+        self._refresh_years()
+
+    def _confirm_payments(self, keys: list) -> None:
+        rows = {r.invoice.key: r for r in (self._invoice_report.rows if self._invoice_report else [])}
+        for key in keys:
+            row = rows.get(key)
+            if row and row.payment_date:
+                self._store.payment_dates[key] = row.payment_date
+        self._save_store()
+        self._refresh_years()
+
+    def _review_invoice(self, key: str) -> None:
+        rows = {r.invoice.key: r for r in (self._invoice_report.rows if self._invoice_report else [])}
+        row = rows.get(key)
+        if row is None:
+            return
+        dialog = ReviewDialog(row.invoice, self)
+        if dialog.exec() == ReviewDialog.DialogCode.Accepted:
+            self._store.set_correction(row.invoice, dialog.values())
+            self._save_store()
+            self._refresh_years()
+
+    def _save_store(self) -> None:
+        try:
+            self._store.save()
+        except OSError as exc:
+            QMessageBox.warning(self, self.windowTitle(), self.tr("Could not save settings: {0}").format(exc))
 
     # ======================================================== rules ==
     def open_rules_dialog(self) -> None:

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "tax_year": 2025,
-  "revision": 1,
-  "updated": "2026-11-11",
+  "revision": 2,
+  "updated": "2026-11-12",
   "income_cap": 2000000,
   "note": {
     "cs": "Pravidla jsou informativní. Ověř je v aktuálním znění zákona nebo s daňovým poradcem.",
@@ -184,5 +184,62 @@
       "match": "nájem obchodního majetku",
       "rate_id": "rental_business_assets"
     }
-  ]
+  ],
+  "trade_classification": {
+    "_comment": "Maps trades from the Trade Licensing Register (ARES/RŽP) to rates. Craft trades = annex 1 of Act 455/1991 Coll.; any other trade falls back to 'default_rate_id'.",
+    "craft_rate_id": "crafts_agriculture",
+    "default_rate_id": "trades",
+    "craft_trades": [
+      "Řeznictví a uzenářství",
+      "Mlékárenství",
+      "Mlynářství",
+      "Pekařství, cukrářství",
+      "Pivovarnictví a sladovnictví",
+      "Zpracování kůží a kožešin",
+      "Aplikace, výroba a opravy ortopedické obuvi",
+      "Broušení a leptání skla",
+      "Zpracování gumárenských směsí",
+      "Zpracování kamene",
+      "Slévárenství, modelářství",
+      "Kovářství, podkovářství",
+      "Obráběčství",
+      "Zámečnictví, nástrojářství",
+      "Galvanizérství, smaltérství",
+      "Výroba, instalace, opravy elektrických strojů a přístrojů, elektronických a telekomunikačních zařízení",
+      "Hodinářství",
+      "Zlatnictví a klenotnictví",
+      "Truhlářství, podlahářství",
+      "Výroba a opravy hudebních nástrojů",
+      "Opravy ostatních dopravních prostředků a pracovních strojů",
+      "Zednictví",
+      "Montáž, opravy, revize a zkoušky elektrických zařízení",
+      "Montáž, opravy a rekonstrukce chladicích zařízení a tepelných čerpadel",
+      "Vodoinstalatérství, topenářství",
+      "Montáž, opravy, revize a zkoušky plynových zařízení a plnění nádob plyny",
+      "Montáž, opravy, revize a zkoušky tlakových zařízení a nádob na plyny",
+      "Montáž, opravy, revize a zkoušky zdvihacích zařízení",
+      "Izolatérství",
+      "Malířství, lakýrnictví, natěračství",
+      "Pokrývačství, tesařství",
+      "Klempířství a oprava karoserií",
+      "Kamnářství",
+      "Opravy silničních vozidel",
+      "Holičství, kadeřnictví",
+      "Barvení a chemická úprava textilií",
+      "Čištění a praní textilu a oděvů",
+      "Kominictví",
+      "Hostinská činnost",
+      "Kosmetické služby",
+      "Pedikúra, manikúra"
+    ],
+    "sources": [
+      {
+        "label": {
+          "cs": "Příloha č. 1 živnostenského zákona – živnosti řemeslné",
+          "en": "Annex 1 of the Trade Licensing Act – craft trades"
+        },
+        "url": "https://www.businessinfo.cz/cz/clanek/zivnostensky-zakon/priloha-1-zakon-o-zivnostenskem/1000648/11978/"
+      }
+    ]
+  }
 }

@@ -39,6 +39,21 @@ class IssueCode(str, Enum):
     MULTIPLE_HOLDERS = "multiple_holders"
     UNKNOWN_ACTIVITY = "unknown_activity"
     NO_RULES_FOR_YEAR = "no_rules_for_year"
+    # --- invoices ---
+    UNKNOWN_DOCUMENT = "unknown_document"
+    OCR_UNAVAILABLE = "ocr_unavailable"
+    MY_ICO_UNKNOWN = "my_ico_unknown"
+    INVOICE_RECEIVED = "invoice_received"
+    INVOICE_NEEDS_REVIEW = "invoice_needs_review"
+    INVOICE_ADVANCE = "invoice_advance"
+    INVOICE_DUPLICATE = "invoice_duplicate"
+    INVOICE_CONFLICT = "invoice_conflict"
+    INVOICE_NO_AMOUNT = "invoice_no_amount"
+    INVOICE_NO_DATE = "invoice_no_date"
+    INVOICE_PAYMENT_UNCONFIRMED = "invoice_payment_unconfirmed"
+    INVOICE_NUMBER_GAP = "invoice_number_gap"
+    INVOICES_UNASSIGNED = "invoices_unassigned"
+    INVOICES_AUTO_ASSIGNED = "invoices_auto_assigned"
 
 
 # English templates used by the CLI and as a fallback. Placeholders refer to
@@ -78,6 +93,31 @@ EN_TEMPLATES: dict[IssueCode, str] = {
     ),
     IssueCode.NO_RULES_FOR_YEAR: (
         "No flat-rate rules for {year}; using rules for {used_year}. Check for an update."
+    ),
+    IssueCode.UNKNOWN_DOCUMENT: "Not recognized as a commission statement or an invoice.",
+    IssueCode.OCR_UNAVAILABLE: (
+        "Scanned document, but OCR is not available ({reason}). Enter the values by hand."
+    ),
+    IssueCode.MY_ICO_UNKNOWN: "Your IČO is not set - all invoices are treated as issued by you.",
+    IssueCode.INVOICE_RECEIVED: "Invoice {number} was issued to you by {supplier} - not counted.",
+    IssueCode.INVOICE_NEEDS_REVIEW: "Invoice {number} was read from {origin} - check and confirm its values.",
+    IssueCode.INVOICE_ADVANCE: "Advance document {number} - not counted (the final invoice is counted).",
+    IssueCode.INVOICE_DUPLICATE: "Duplicate of {original} - counted only once.",
+    IssueCode.INVOICE_CONFLICT: (
+        "Invoice number {number} appears twice with different amounts ({amount} vs {other_amount})."
+    ),
+    IssueCode.INVOICE_NO_AMOUNT: (
+        "Invoice {number}: the amount could not be read - not counted until confirmed."
+    ),
+    IssueCode.INVOICE_NO_DATE: "Invoice {number}: no date found - the tax year cannot be determined.",
+    IssueCode.INVOICE_PAYMENT_UNCONFIRMED: (
+        "Invoice {number} was issued in {issue_year}, but its due date {due} falls in {year}. "
+        "Confirm the actual payment date."
+    ),
+    IssueCode.INVOICE_NUMBER_GAP: "Invoice number(s) {missing} missing in the sequence.",
+    IssueCode.INVOICES_UNASSIGNED: "{count} invoice(s) without a flat-rate category ({amount}).",
+    IssueCode.INVOICES_AUTO_ASSIGNED: (
+        "{count} invoice(s) got their rate automatically from a remembered group - please check."
     ),
 }
 

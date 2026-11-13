@@ -2,7 +2,7 @@
 *.pdf
 *.PDF
 vzory/
-demo_statements/
+demo_data/
 
 # --- Python
 __pycache__/

@@ -227,7 +227,9 @@ class RulesDialog(QDialog):
             self.overrides_table.setItem(row, 1, QTableWidgetItem(f"{rate.percent} %" if rate else rate_id))
         self.clear_overrides_button.setEnabled(bool(self._overrides))
 
-        links = "<br>".join(f'<a href="{s.url}">{text(s.label, lang)}</a>' for s in rules.sources)
+        # Law sources plus the source of the craft-trade list used with ARES.
+        sources = list(rules.sources) + list(rules.trades.sources if rules.trades else ())
+        links = "<br>".join(f'<a href="{s.url}">{text(s.label, lang)}</a>' for s in sources)
         self.sources_label.setText(links)
         self.open_online_button.setEnabled(bool(rules.sources))
 

@@ -28,13 +28,26 @@ jobs:
       - name: Tests
         run: python -m pytest -q
 
+      - name: Install Tesseract OCR (bundled into the .exe)
+        # The .exe ships Tesseract with the Czech model, so scanned invoices
+        # work without the user installing anything.
+        shell: pwsh
+        run: |
+          choco install tesseract --no-progress -y
+          $tess = "C:\Program Files\Tesseract-OCR"
+          Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata_fast/raw/main/ces.traineddata" `
+            -OutFile "$tess\tessdata\ces.traineddata"
+          & "$tess\tesseract.exe" --list-langs
+
       - name: Build .exe
         # --onefile: a single portable file; --windowed: no console window;
-        # --collect-data: bundle rules/*.json and translations/*.qm.
+        # --collect-data: bundle rules/*.json and translations/*.qm;
+        # --add-data: the Tesseract folder, found at runtime by core/ocr.py.
         run: >
           pyinstaller --noconfirm --onefile --windowed
           --name CommissionTaxCalc
           --collect-data commission_tax_calc
+          --add-data "C:\Program Files\Tesseract-OCR;tesseract"
           packaging/launcher.py
 
       - uses: softprops/action-gh-release@v2

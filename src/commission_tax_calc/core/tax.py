@@ -63,16 +63,28 @@ def flat_rate_expenses(income: Decimal, rate: RateCategory, income_cap: Decimal)
     return min(expenses, rate.max_expenses), capped
 
 
+INVOICES_LABEL = "Faktury"  # shown as the "activity" of invoice income
+UNASSIGNED_INVOICES_LABEL = "Faktury bez sazby"
+
+
 def compute(
     activity_totals: dict[str, Decimal],
     rules: RuleSet,
     overrides: dict[str, str] | None = None,
+    invoice_income: dict[str, Decimal] | None = None,
+    unassigned_invoices: Decimal = Decimal(0),
 ) -> TaxSummary:
-    """Group statement activities by rate and compute expenses.
+    """Group income by rate and compute expenses.
 
-    ``overrides`` maps an activity heading to a rate id chosen manually by the
-    user for headings the rules do not recognize. A manual choice wins over
-    the rules on purpose - the user has the final say.
+    ``activity_totals`` come from commission statements (keyed by the
+    statement's activity heading); ``overrides`` maps a heading to a rate id
+    chosen manually by the user. A manual choice wins over the rules on
+    purpose - the user has the final say.
+
+    ``invoice_income`` is already keyed by rate id (the rate was chosen per
+    invoice). Invoice income without a rate is still income, so it is kept in
+    ``unmapped`` - it raises the tax base until the user assigns a rate,
+    rather than silently disappearing from it.
     """
     overrides = overrides or {}
     grouped: dict[str, tuple[RateCategory, list[str], Decimal]] = {}
@@ -94,6 +106,18 @@ def compute(
             continue
         _, names, total = grouped.get(rate.id, (rate, [], Decimal(0)))
         grouped[rate.id] = (rate, names + [category], total + amount)
+
+    for rate_id, amount in sorted((invoice_income or {}).items()):
+        rate = rules.rate(rate_id)
+        if rate is None:  # a rate removed from newer rules - treat as unassigned
+            unassigned_invoices += amount
+            continue
+        _, names, total = grouped.get(rate.id, (rate, [], Decimal(0)))
+        grouped[rate.id] = (rate, names + [INVOICES_LABEL], total + amount)
+    if unassigned_invoices:
+        # The aggregated INVOICES_UNASSIGNED issue already explains this, so
+        # no UNKNOWN_ACTIVITY issue is added here.
+        summary.unmapped[UNASSIGNED_INVOICES_LABEL] = unassigned_invoices
 
     # Keep the order of the rules file (80, 60, 40, 30) - same as the form.
     order = {r.id: i for i, r in enumerate(rules.rates)}

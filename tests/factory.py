@@ -169,3 +169,127 @@ def make_pdf(path: Path, text: str, font: Path) -> Path:
         y -= 11
     pdf.save()
     return path
+
+
+# ------------------------------------------------------------- invoices ---
+
+SUPPLIER_ICO = "12345679"  # valid checksum, fictitious use
+CUSTOMER_A = ("33333335", "Smyšlená stavební a.s.")
+CUSTOMER_B = ("22222227", "Vymyšlené projekty s.r.o.")
+
+
+@dataclass
+class InvoiceSpec:
+    number: str = "2030001"
+    supplier_ico: str = SUPPLIER_ICO
+    supplier_name: str = "Testovací Tomáš"
+    customer_ico: str = CUSTOMER_A[0]
+    customer_name: str = CUSTOMER_A[1]
+    issue: date = date(2030, 3, 1)
+    due: date = date(2030, 3, 15)
+    lines: list[tuple[str, int]] = field(
+        default_factory=lambda: [("Montáž elektroinstalace, byt č. 12", 10000)]
+    )
+    doc_type: int = 1
+    vat: bool = False
+    uuid: str | None = None
+    note: str = "Fakturujeme Vám:"
+
+    @property
+    def total(self) -> int:
+        return sum(amount for _, amount in self.lines)
+
+
+def make_isdoc(spec: InvoiceSpec) -> bytes:
+    """A minimal ISDOC 6 document with the elements the app reads."""
+    import uuid as uuidlib
+    from xml.sax.saxutils import escape
+
+    total = spec.total
+    with_vat = round(total * 1.21) if spec.vat else total
+    lines = "".join(
+        f"<InvoiceLine><ID>{i}</ID><LineExtensionAmount>{amount}.00</LineExtensionAmount>"
+        f"<Item><Description>{escape(text)}</Description></Item></InvoiceLine>"
+        for i, (text, amount) in enumerate(spec.lines, start=1)
+    )
+    xml = f"""<?xml version="1.0" encoding="utf-8"?>
+<Invoice xmlns="http://isdoc.cz/namespace/2013" version="6.0.2">
+  <DocumentType>{spec.doc_type}</DocumentType>
+  <ID>{spec.number}</ID>
+  <UUID>{spec.uuid or uuidlib.uuid5(uuidlib.NAMESPACE_URL, spec.number + spec.supplier_ico)}</UUID>
+  <IssueDate>{spec.issue.isoformat()}</IssueDate>
+  <TaxPointDate>{spec.issue.isoformat()}</TaxPointDate>
+  <VATApplicable>{"true" if spec.vat else "false"}</VATApplicable>
+  <Note>{escape(spec.note)}</Note>
+  <AccountingSupplierParty><Party><PartyIdentification><ID>{spec.supplier_ico}</ID></PartyIdentification>
+    <PartyName><Name>{escape(spec.supplier_name)}</Name></PartyName></Party></AccountingSupplierParty>
+  <AccountingCustomerParty><Party><PartyIdentification><ID>{spec.customer_ico}</ID></PartyIdentification>
+    <PartyName><Name>{escape(spec.customer_name)}</Name></PartyName></Party></AccountingCustomerParty>
+  <InvoiceLines>{lines}</InvoiceLines>
+  <LegalMonetaryTotal>
+    <TaxExclusiveAmount>{total}.00</TaxExclusiveAmount>
+    <TaxInclusiveAmount>{with_vat}.00</TaxInclusiveAmount>
+    <PayableAmount>{with_vat}.00</PayableAmount>
+  </LegalMonetaryTotal>
+  <PaymentMeans><Payment><Details><PaymentDueDate>{spec.due.isoformat()}</PaymentDueDate></Details></Payment></PaymentMeans>
+</Invoice>"""
+    return xml.encode("utf-8")
+
+
+def invoice_text(spec: InvoiceSpec) -> str:
+    """Printed form of the invoice, laid out like a common Czech invoice."""
+    d = lambda x: x.strftime("%d.%m.%Y")  # noqa: E731
+    title = {2: "OPRAVNÝ DAŇOVÝ DOKLAD - DOBROPIS", 4: "ZÁLOHOVÁ FAKTURA"}.get(spec.doc_type, "FAKTURA")
+    rows = [
+        f"{spec.supplier_name} {title} č. {spec.number}",
+        f"Dodavatel: Variabilní s.: {spec.number}",
+        spec.supplier_name,
+        "Testovací 1, 74401 Frenštát pod Radhoštěm",
+        f"Odběratel: IČ: {spec.customer_ico}",
+        spec.customer_name,
+        f"IČ: {spec.supplier_ico}",
+        f"Datum vystavení: {d(spec.issue)}",
+        f"Datum splatnosti: {d(spec.due)}",
+        "Firma není plátcem DPH." if not spec.vat else f"DUZP: {d(spec.issue)}",
+        "Označení dodávky Množství J.cena Kč Celkem",
+        spec.note,
+    ]
+    rows += [f"{text} 1 ks {czk(amount)[:-3]},00 {czk(amount)[:-3]},00" for text, amount in spec.lines]
+    rows.append(f"Součet položek {czk(spec.total)[:-3]},00")
+    if spec.vat:
+        rows.append(f"Celkem bez DPH {czk(spec.total)[:-3]},00")
+        rows.append(f"CELKEM K ÚHRADĚ {czk(round(spec.total * 1.21))[:-3]},00")
+    else:
+        rows.append(f"CELKEM K ÚHRADĚ Částky jsou uvedeny v Kč {czk(spec.total)[:-3]},00")
+    return "\n".join(rows)
+
+
+def make_invoice_pdf(path: Path, spec: InvoiceSpec, font: Path, embed_isdoc: bool = True) -> Path:
+    make_pdf(path, invoice_text(spec), font)
+    if embed_isdoc:
+        import io
+
+        import pypdfium2
+
+        pdf = pypdfium2.PdfDocument(str(path))
+        attachment = pdf.new_attachment("invoice.isdoc")
+        attachment.set_data(make_isdoc(spec))
+        buffer = io.BytesIO()
+        pdf.save(buffer)
+        pdf.close()
+        path.write_bytes(buffer.getvalue())
+    return path
+
+
+def make_scanned_pdf(path: Path, spec: InvoiceSpec, font: Path) -> Path:
+    """An image-only PDF (no text layer), like a scanned paper invoice."""
+    import pypdfium2
+
+    text_pdf = path.with_suffix(".tmp.pdf")
+    make_invoice_pdf(text_pdf, spec, font, embed_isdoc=False)
+    pdf = pypdfium2.PdfDocument(str(text_pdf))
+    image = pdf[0].render(scale=200 / 72).to_pil().convert("RGB")
+    pdf.close()
+    text_pdf.unlink()
+    image.save(path, "PDF", resolution=200)
+    return path
